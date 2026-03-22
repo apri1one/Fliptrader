@@ -4,12 +4,15 @@ import type {
   BookTop,
   OrderParams,
   OrderResult,
+  OrderStatus,
 } from "./types.js";
 import * as log from "../utils/logger.js";
 
 type OKXClient = InstanceType<(typeof ccxt)["okx"]>;
 
 const TAG = "OKX-Adapter";
+const ALGO_POLL_INTERVAL_MS = 2000;
+const ALGO_POLL_TIMEOUT_MS = 120_000; // 2 minutes
 
 export class OKXAdapter implements ExchangeAdapter {
   name = "okx";
@@ -62,30 +65,37 @@ export class OKXAdapter implements ExchangeAdapter {
     await this.client.cancelOrder(orderId, symbol);
   }
 
-  async getOrderStatus(
-    symbol: string,
-    orderId: string,
-  ): Promise<{ filled: number; remaining: number; status: string }> {
+  async getOrderStatus(symbol: string, orderId: string): Promise<OrderStatus> {
     const order = await this.client.fetchOrder(orderId, symbol);
     return {
       filled: order.filled ?? 0,
       remaining: order.remaining ?? 0,
       status: order.status ?? "unknown",
+      avgPrice: order.average ?? undefined,
     };
   }
 
-  // OKX 原生 chase 限价单 — POST /api/v5/trade/order-algo  ordType: "chase"
-  // 服务器端自动跟踪最优买卖价挂 post-only 单
+  // C1+C2: OKX 原生 chase 限价单，带轮询等待实际成交 + reduceOnly 透传
   async placeChaseLimitOrder(params: OrderParams): Promise<OrderResult> {
     const instId = params.symbol.replace("/", "-").replace(":", "-");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamically generated private endpoint
-    const response = (await (this.client as any).privatePostTradeOrderAlgo({
+
+    const reqBody: Record<string, string> = {
       instId,
       tdMode: "isolated",
       side: params.side,
       ordType: "chase",
       sz: String(params.size),
-    })) as { data?: Array<{ algoId?: string }> };
+    };
+
+    // C2: 透传 reduceOnly
+    if (params.reduceOnly) {
+      reqBody.reduceOnly = "true";
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamically generated private endpoint
+    const response = (await (this.client as any).privatePostTradeOrderAlgo(
+      reqBody,
+    )) as { data?: Array<{ algoId?: string }> };
 
     const algoId = response.data?.[0]?.algoId ?? "unknown";
     log.info(
@@ -93,12 +103,77 @@ export class OKXAdapter implements ExchangeAdapter {
       `chase order ${params.side} ${params.size} ${params.symbol} → algoId: ${algoId}`,
     );
 
-    return {
-      orderId: algoId,
-      filledSize: 0,
-      avgPrice: 0,
-      status: "partial",
-    };
+    if (algoId === "unknown") {
+      return { orderId: "unknown", filledSize: 0, avgPrice: 0, status: "failed" };
+    }
+
+    // C1: 轮询等待 algo order 实际成交
+    return await this.pollAlgoOrder(algoId, instId);
+  }
+
+  private async pollAlgoOrder(algoId: string, instId: string): Promise<OrderResult> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < ALGO_POLL_TIMEOUT_MS) {
+      await sleep(ALGO_POLL_INTERVAL_MS);
+
+      try {
+        // 先查 pending
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pending = (await (this.client as any).privateGetTradeOrdersAlgoPending({
+          ordType: "chase",
+          algoId,
+        })) as { data?: Array<Record<string, string>> };
+
+        const pendingOrder = pending?.data?.[0];
+        if (pendingOrder) {
+          // 还在执行中，继续等
+          const filledSoFar = parseFloat(pendingOrder.actualSz || "0");
+          if (filledSoFar > 0) {
+            log.debug(TAG, `algo ${algoId} still running, filled so far: ${filledSoFar}`);
+          }
+          continue;
+        }
+
+        // 不在 pending 中，查 history
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const history = (await (this.client as any).privateGetTradeOrdersAlgoHistory({
+          ordType: "chase",
+          algoId,
+        })) as { data?: Array<Record<string, string>> };
+
+        const historyOrder = history?.data?.[0];
+        if (historyOrder) {
+          const filledSize = parseFloat(historyOrder.actualSz || "0");
+          const avgPrice = parseFloat(historyOrder.actualPx || "0");
+          const state = historyOrder.state; // "effective", "canceled", "order_failed"
+
+          log.info(TAG, `algo ${algoId} completed: state=${state}, filled=${filledSize}, avgPx=${avgPrice}`);
+
+          return {
+            orderId: algoId,
+            filledSize,
+            avgPrice,
+            status: filledSize > 0 ? (state === "effective" ? "filled" : "partial") : "failed",
+          };
+        }
+      } catch (e: any) {
+        log.warn(TAG, `poll algo ${algoId} error: ${e.message}`);
+      }
+    }
+
+    // 超时，尝试取消
+    log.warn(TAG, `algo ${algoId} poll timeout, attempting cancel`);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (this.client as any).privatePostTradeCancelAlgos(
+        JSON.stringify([{ algoId, instId }]),
+      );
+    } catch (e: any) {
+      log.warn(TAG, `cancel algo ${algoId} failed: ${e.message}`);
+    }
+
+    return { orderId: algoId, filledSize: 0, avgPrice: 0, status: "failed" };
   }
 
   async getPosition(
@@ -112,4 +187,21 @@ export class OKXAdapter implements ExchangeAdapter {
       side: (pos.side as "long" | "short") ?? "none",
     };
   }
+
+  async fetchAllPositions(): Promise<
+    Array<{ symbol: string; size: number; side: "long" | "short" }>
+  > {
+    const positions = await this.client.fetchPositions();
+    return positions
+      .filter((p) => p.contracts !== 0)
+      .map((p) => ({
+        symbol: p.symbol,
+        size: Math.abs(p.contracts ?? 0),
+        side: (p.side as "long" | "short") ?? "long",
+      }));
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

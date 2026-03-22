@@ -10,3 +10,8 @@ export function mapCoin(hlCoin: string, exchange: ExchangeId): string {
   // Binance, OKX, Bybit 统一用 ccxt 格式
   return `${hlCoin}/USDT:USDT`;
 }
+
+// "BTC/USDT:USDT" -> "BTC", "ETH/USDC:USDC" -> "ETH"
+export function reverseMapCoin(symbol: string): string {
+  return symbol.split("/")[0];
+}

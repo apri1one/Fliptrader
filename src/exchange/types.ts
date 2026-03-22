@@ -18,6 +18,13 @@ export interface BookTop {
   ask: number;
 }
 
+export interface OrderStatus {
+  filled: number;
+  remaining: number;
+  status: string;
+  avgPrice?: number;
+}
+
 export interface ExchangeAdapter {
   name: string;
   ensureIsolatedMargin(symbol: string, leverage: number): Promise<void>;
@@ -30,12 +37,12 @@ export interface ExchangeAdapter {
     reduceOnly: boolean,
   ): Promise<string>;
   cancelOrder(symbol: string, orderId: string): Promise<void>;
-  getOrderStatus(
-    symbol: string,
-    orderId: string,
-  ): Promise<{ filled: number; remaining: number; status: string }>;
+  getOrderStatus(symbol: string, orderId: string): Promise<OrderStatus>;
   placeChaseLimitOrder?(params: OrderParams): Promise<OrderResult>;
   getPosition(
     symbol: string,
   ): Promise<{ size: number; side: "long" | "short" | "none" }>;
+  fetchAllPositions(): Promise<
+    Array<{ symbol: string; size: number; side: "long" | "short" }>
+  >;
 }

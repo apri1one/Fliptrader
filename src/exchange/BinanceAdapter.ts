@@ -1,5 +1,5 @@
 import ccxt, { binanceusdm } from "ccxt";
-import type { ExchangeAdapter, BookTop } from "./types.js";
+import type { ExchangeAdapter, BookTop, OrderStatus } from "./types.js";
 import * as log from "../utils/logger.js";
 
 const TAG = "Binance-Adapter";
@@ -61,15 +61,13 @@ export class BinanceAdapter implements ExchangeAdapter {
     await this.client.cancelOrder(orderId, symbol);
   }
 
-  async getOrderStatus(
-    symbol: string,
-    orderId: string,
-  ): Promise<{ filled: number; remaining: number; status: string }> {
+  async getOrderStatus(symbol: string, orderId: string): Promise<OrderStatus> {
     const order = await this.client.fetchOrder(orderId, symbol);
     return {
       filled: order.filled ?? 0,
       remaining: order.remaining ?? 0,
       status: order.status ?? "unknown",
+      avgPrice: order.average ?? undefined,
     };
   }
 
@@ -83,5 +81,18 @@ export class BinanceAdapter implements ExchangeAdapter {
       size: Math.abs(pos.contracts ?? 0),
       side: (pos.side as "long" | "short") ?? "none",
     };
+  }
+
+  async fetchAllPositions(): Promise<
+    Array<{ symbol: string; size: number; side: "long" | "short" }>
+  > {
+    const positions = await this.client.fetchPositions();
+    return positions
+      .filter((p) => p.contracts !== 0)
+      .map((p) => ({
+        symbol: p.symbol,
+        size: Math.abs(p.contracts ?? 0),
+        side: (p.side as "long" | "short") ?? "long",
+      }));
   }
 }

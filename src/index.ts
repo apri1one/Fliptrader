@@ -10,6 +10,7 @@ import { BinanceAdapter } from "./exchange/BinanceAdapter.js";
 import { OKXAdapter } from "./exchange/OKXAdapter.js";
 import { BybitAdapter } from "./exchange/BybitAdapter.js";
 import type { ExchangeAdapter } from "./exchange/types.js";
+import { reverseMapCoin } from "./utils/coinMapping.js";
 import * as log from "./utils/logger.js";
 
 const TAG = "Main";
@@ -96,8 +97,18 @@ async function main() {
     );
   });
 
-  // Start monitor (constructor filters enabled targets internally)
+  // Start monitor
   const monitor = new HyperliquidMonitor(enabledTargets);
+
+  // H5: 初始仓位写入 tracker
+  monitor.setInitialPositionHandler((targetName, positions) => {
+    for (const pos of positions) {
+      const side: "B" | "A" = pos.szi > 0 ? "B" : "A";
+      tracker.applyFill(targetName, pos.coin, side, Math.abs(pos.szi), pos.entryPx);
+      log.info(TAG, `loaded initial position: ${targetName} ${pos.coin} ${pos.szi > 0 ? "LONG" : "SHORT"} ${Math.abs(pos.szi)} @ ${pos.entryPx}`);
+    }
+  });
+
   monitor.onFill((event) => {
     orderManager.handleFill(event).catch((e: Error) => {
       log.error(TAG, `handleFill error: ${e.message}`);
@@ -106,6 +117,24 @@ async function main() {
       );
     });
   });
+
+  // 同步自身在各交易所的真实仓位
+  for (const [exchangeId, adapter] of adapters) {
+    try {
+      const positions = await adapter.fetchAllPositions();
+      const myKey = `my-${exchangeId}`;
+      for (const pos of positions) {
+        const hlCoin = reverseMapCoin(pos.symbol);
+        const side: "B" | "A" = pos.side === "long" ? "B" : "A";
+        const book = await adapter.getBookTop(pos.symbol);
+        const price = pos.side === "long" ? book.bid : book.ask;
+        tracker.applyFill(myKey, hlCoin, side, pos.size, price);
+        log.info(TAG, `synced my position: ${myKey} ${hlCoin} ${pos.side} ${pos.size}`);
+      }
+    } catch (e: any) {
+      log.error(TAG, `failed to sync positions for ${exchangeId}: ${e.message}`);
+    }
+  }
 
   await monitor.start();
 
