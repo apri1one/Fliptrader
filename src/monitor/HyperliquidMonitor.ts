@@ -7,11 +7,25 @@ const TAG = "Monitor";
 const HL_WS_URL = "wss://api.hyperliquid.xyz/ws";
 const HL_INFO_URL = "https://api.hyperliquid.xyz/info";
 
+// H5: 初始仓位回调类型
+export type InitialPositionHandler = (
+  targetName: string,
+  positions: Array<{
+    coin: string;
+    szi: number;
+    entryPx: number;
+    leverage: number;
+  }>,
+) => void;
+
 export class HyperliquidMonitor {
   private wsList: Map<string, WebSocket> = new Map();
   private handlers: FillHandler[] = [];
   private targets: TargetConfig[];
   private reconnectDelayMs = 3000;
+  private onInitialPositions?: InitialPositionHandler;
+  private processedFills = new Set<string>();
+  private readonly MAX_PROCESSED_FILLS = 10_000;
 
   constructor(targets: TargetConfig[]) {
     this.targets = targets.filter((t) => t.enabled);
@@ -21,12 +35,15 @@ export class HyperliquidMonitor {
     this.handlers.push(handler);
   }
 
+  // H5: 设置初始仓位回调
+  setInitialPositionHandler(handler: InitialPositionHandler): void {
+    this.onInitialPositions = handler;
+  }
+
   async start(): Promise<void> {
-    // 启动时先 REST 拉取每个目标的当前仓位
     for (const target of this.targets) {
       await this.fetchInitialPositions(target);
     }
-    // 然后建立 WS 连接
     for (const target of this.targets) {
       this.connectTarget(target);
     }
@@ -41,8 +58,8 @@ export class HyperliquidMonitor {
     this.wsList.clear();
   }
 
-  // REST 拉取目标地址当前仓位（初始化用）
-  async fetchInitialPositions(target: TargetConfig): Promise<any> {
+  // H5: REST 拉取初始仓位并通知 tracker
+  async fetchInitialPositions(target: TargetConfig): Promise<void> {
     try {
       const response = await fetch(HL_INFO_URL, {
         method: "POST",
@@ -52,14 +69,29 @@ export class HyperliquidMonitor {
           user: target.address,
         }),
       });
-      const data = await response.json();
-      log.info(TAG, `fetched initial positions for ${target.name}`, {
-        positions: data.assetPositions?.length ?? 0,
-      });
-      return data;
+      const data = (await response.json()) as {
+        assetPositions?: Array<{
+          position: { coin: string; szi: string; entryPx: string; leverage: { value: number } };
+        }>;
+      };
+
+      const positions = (data.assetPositions ?? [])
+        .filter((ap) => parseFloat(ap.position.szi) !== 0)
+        .map((ap) => ({
+          coin: ap.position.coin,
+          szi: parseFloat(ap.position.szi),
+          entryPx: parseFloat(ap.position.entryPx),
+          leverage: ap.position.leverage.value,
+        }));
+
+      log.info(TAG, `fetched ${positions.length} initial positions for ${target.name}`);
+
+      // 通知 tracker
+      if (positions.length > 0 && this.onInitialPositions) {
+        this.onInitialPositions(target.name, positions);
+      }
     } catch (e: any) {
       log.error(TAG, `failed to fetch initial positions for ${target.name}: ${e.message}`);
-      return null;
     }
   }
 
@@ -102,21 +134,65 @@ export class HyperliquidMonitor {
     this.wsList.set(target.name, ws);
   }
 
-  private handleFills(target: TargetConfig, data: { isSnapshot?: boolean; user: string; fills: HlFill[] }): void {
+  // H6: WS fill 数据校验
+  private isValidFill(fill: unknown): fill is HlFill {
+    if (typeof fill !== "object" || fill === null) return false;
+    const f = fill as Record<string, unknown>;
+    if (typeof f.coin !== "string" || !f.coin) return false;
+    if (typeof f.px !== "string" || typeof f.sz !== "string") return false;
+    if (f.side !== "B" && f.side !== "A") return false;
+    if (typeof f.closedPnl !== "string") return false;
+    if (typeof f.dir !== "string") return false;
+
+    const px = parseFloat(f.px as string);
+    const sz = parseFloat(f.sz as string);
+    if (isNaN(px) || isNaN(sz) || px <= 0 || sz <= 0) return false;
+
+    return true;
+  }
+
+  private handleFills(
+    target: TargetConfig,
+    data: { isSnapshot?: boolean; user: string; fills: unknown[] },
+  ): void {
     if (data.isSnapshot) {
       log.debug(TAG, `snapshot for ${target.name}, ${data.fills.length} historical fills (skipped)`);
       return;
     }
 
-    for (const fill of data.fills) {
-      const isOpen = fill.closedPnl === "0";
+    for (const rawFill of data.fills) {
+      // H6: 校验 fill 数据完整性
+      if (!this.isValidFill(rawFill)) {
+        log.warn(TAG, `invalid fill data for ${target.name}, skipping`, rawFill);
+        continue;
+      }
+
+      const fill = rawFill;
+
+      if (this.processedFills.has(fill.hash)) {
+        log.debug(TAG, `duplicate fill ${fill.hash} for ${target.name}, skipping`);
+        continue;
+      }
+      this.processedFills.add(fill.hash);
+      // 防止内存膨胀
+      if (this.processedFills.size > this.MAX_PROCESSED_FILLS) {
+        const first = this.processedFills.values().next().value;
+        this.processedFills.delete(first!);
+      }
+
+      // C3: 使用 dir 字段判断开/平仓，而非 closedPnl 字符串比较
+      const isOpen = fill.dir.startsWith("Open");
+
       const event: FillEvent = {
         targetName: target.name,
         targetAddress: target.address,
         fill,
         isOpen,
       };
-      log.info(TAG, `${target.name} ${fill.side === "B" ? "BUY" : "SELL"} ${fill.sz} ${fill.coin} @ ${fill.px} | ${isOpen ? "OPEN" : "CLOSE"}`);
+      log.info(
+        TAG,
+        `${target.name} ${fill.side === "B" ? "BUY" : "SELL"} ${fill.sz} ${fill.coin} @ ${fill.px} | ${isOpen ? "OPEN" : "CLOSE"} (dir=${fill.dir})`,
+      );
       for (const handler of this.handlers) {
         handler(event);
       }
