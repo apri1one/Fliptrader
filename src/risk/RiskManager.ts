@@ -24,6 +24,17 @@ export class RiskManager {
   }
 
   check(input: RiskCheckInput): RiskCheckResult {
+    // H2: NaN 校验 — NaN 绕过所有比较运算
+    if (
+      isNaN(input.orderNotional) ||
+      isNaN(input.currentCoinNotional) ||
+      isNaN(input.currentTotalNotional) ||
+      isNaN(input.perCoinCap)
+    ) {
+      log.warn(TAG, `rejected: NaN detected in risk input`, input);
+      return { allowed: false, adjustedNotional: 0, reason: "invalid input (NaN)" };
+    }
+
     const coinRemaining = input.perCoinCap - input.currentCoinNotional;
     const totalRemaining = this.totalCap - input.currentTotalNotional;
 

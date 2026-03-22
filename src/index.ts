@@ -114,7 +114,8 @@ async function main() {
     for (const pos of positions) {
       const side: "B" | "A" = pos.szi > 0 ? "B" : "A";
       tracker.applyFill(targetName, pos.coin, side, Math.abs(pos.szi), pos.entryPx);
-      log.info(TAG, `loaded initial position: ${targetName} ${pos.coin} ${pos.szi > 0 ? "LONG" : "SHORT"} ${Math.abs(pos.szi)} @ ${pos.entryPx}`);
+      tracker.setLeverage(targetName, pos.coin, pos.leverage);
+      log.info(TAG, `loaded initial position: ${targetName} ${pos.coin} ${pos.szi > 0 ? "LONG" : "SHORT"} ${Math.abs(pos.szi)} @ ${pos.entryPx} (${pos.leverage}x)`);
     }
   });
 

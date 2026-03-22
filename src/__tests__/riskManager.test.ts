@@ -64,4 +64,43 @@ describe("RiskManager", () => {
     });
     expect(result.allowed).toBe(false);
   });
+
+  it("rejects when orderNotional is NaN", () => {
+    const rm = new RiskManager(50000);
+    const result = rm.check({
+      coin: "BTC",
+      orderNotional: NaN,
+      currentCoinNotional: 0,
+      perCoinCap: 10000,
+      currentTotalNotional: 0,
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("NaN");
+  });
+
+  it("rejects when currentCoinNotional is NaN", () => {
+    const rm = new RiskManager(50000);
+    const result = rm.check({
+      coin: "BTC",
+      orderNotional: 1000,
+      currentCoinNotional: NaN,
+      perCoinCap: 10000,
+      currentTotalNotional: 0,
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("NaN");
+  });
+
+  it("rejects when perCoinCap is NaN", () => {
+    const rm = new RiskManager(50000);
+    const result = rm.check({
+      coin: "BTC",
+      orderNotional: 1000,
+      currentCoinNotional: 0,
+      perCoinCap: NaN,
+      currentTotalNotional: 0,
+    });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("NaN");
+  });
 });

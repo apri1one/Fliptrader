@@ -14,6 +14,8 @@ export function calcOrderSize(
   value: number,
   fillSize: number,
   price: number,
+  myLeverage?: number,
+  targetLeverage?: number,
 ): number {
   switch (mode) {
     case "fixedRatio":
@@ -22,6 +24,12 @@ export function calcOrderSize(
       return fillSize;
     case "fixedAmount":
       return value / price;
+    case "leverageRatio": {
+      // 匹配保证金用量: orderSize = fillSize × sizeValue × myLeverage / targetLeverage
+      const ml = myLeverage ?? 1;
+      const tl = targetLeverage ?? ml; // 无目标杠杆数据时退化为 equalSize × sizeValue
+      return fillSize * value * ml / tl;
+    }
   }
 }
 
@@ -94,7 +102,8 @@ export class OrderManager {
     const isOpen = event.isOpen;
 
     // Calculate order size
-    let orderSize = calcOrderSize(config.sizeMode, config.sizeValue, fillSize, price);
+    const targetLeverage = this.tracker.getLeverage(event.targetName, fill.coin) ?? undefined;
+    let orderSize = calcOrderSize(config.sizeMode, config.sizeValue, fillSize, price, config.leverage, targetLeverage);
     const orderNotional = orderSize * price;
 
     // H2: 下单量 NaN 校验

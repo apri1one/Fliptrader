@@ -66,3 +66,62 @@ describe("validateConfig", () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 });
+
+describe("environment variable resolution", () => {
+  it("resolves ${ENV_VAR} in string values", () => {
+    process.env.TEST_API_KEY = "resolved-key";
+    const yaml = VALID_YAML.replace('"key"', '"${TEST_API_KEY}"').replace(/"key"/g, '"${TEST_API_KEY}"');
+    const config = parseConfig(`
+global:
+  network: mainnet
+  totalPositionCap: 50000
+  checkIntervalMs: 1000
+exchanges:
+  okx:
+    apiKey: "\${TEST_API_KEY}"
+    apiSecret: "secret"
+    passphrase: "pass"
+telegram:
+  botToken: "token"
+  chatId: "123"
+targets:
+  - name: whale-1
+    address: "0xabc0000000000000000000000000000000000001"
+    exchange: okx
+    leverage: 10
+    sizeMode: fixedRatio
+    sizeValue: 0.1
+    perCoinCap: 10000
+    enabled: true
+`);
+    expect(config.exchanges.okx?.apiKey).toBe("resolved-key");
+    delete process.env.TEST_API_KEY;
+  });
+
+  it("throws on missing environment variable", () => {
+    delete process.env.NONEXISTENT_VAR;
+    expect(() => parseConfig(`
+global:
+  network: mainnet
+  totalPositionCap: 50000
+  checkIntervalMs: 1000
+exchanges:
+  okx:
+    apiKey: "\${NONEXISTENT_VAR}"
+    apiSecret: "secret"
+    passphrase: "pass"
+telegram:
+  botToken: "token"
+  chatId: "123"
+targets:
+  - name: t1
+    address: "0x0000000000000000000000000000000000000001"
+    exchange: okx
+    leverage: 10
+    sizeMode: fixedRatio
+    sizeValue: 0.1
+    perCoinCap: 10000
+    enabled: true
+`)).toThrow("NONEXISTENT_VAR");
+  });
+});

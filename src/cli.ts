@@ -339,12 +339,12 @@ async function addTarget(): Promise<void> {
   const leverage = parseInt(await askWithDefault("杠杆倍数", "10"));
   if (isNaN(leverage) || leverage <= 0) { console.log(red("杠杆必须 > 0")); return; }
 
-  console.log("仓位模式: 1.fixedRatio  2.equalSize  3.fixedAmount");
+  console.log("仓位模式: 1.fixedRatio  2.equalSize  3.fixedAmount  4.leverageRatio");
   const modeChoice = (await askWithDefault("选择", "1")).trim();
-  const modeMap: Record<string, SizeMode> = { "1": "fixedRatio", "2": "equalSize", "3": "fixedAmount" };
+  const modeMap: Record<string, SizeMode> = { "1": "fixedRatio", "2": "equalSize", "3": "fixedAmount", "4": "leverageRatio" };
   const sizeMode = modeMap[modeChoice] ?? "fixedRatio";
 
-  const defaultSizeValue = sizeMode === "fixedRatio" ? "0.1" : sizeMode === "fixedAmount" ? "500" : "1";
+  const defaultSizeValue = sizeMode === "fixedRatio" ? "0.1" : sizeMode === "fixedAmount" ? "500" : sizeMode === "leverageRatio" ? "1" : "1";
   const sizeValue = parseFloat(await askWithDefault("仓位值", defaultSizeValue));
   if (isNaN(sizeValue) || sizeValue <= 0) { console.log(red("仓位值必须 > 0")); return; }
 

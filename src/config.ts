@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import { parse } from "yaml";
 
-export type SizeMode = "fixedRatio" | "equalSize" | "fixedAmount";
+export type SizeMode = "fixedRatio" | "equalSize" | "fixedAmount" | "leverageRatio";
 export type ExchangeId = "hyperliquid" | "binance" | "okx" | "bybit";
 
 export interface TargetConfig {
@@ -34,7 +34,7 @@ export interface AppConfig {
   targets: TargetConfig[];
 }
 
-const VALID_SIZE_MODES: SizeMode[] = ["fixedRatio", "equalSize", "fixedAmount"];
+const VALID_SIZE_MODES: SizeMode[] = ["fixedRatio", "equalSize", "fixedAmount", "leverageRatio"];
 const VALID_EXCHANGES: ExchangeId[] = ["hyperliquid", "binance", "okx", "bybit"];
 
 // S-C1: 解析环境变量引用 ${ENV_VAR}，避免明文存储密钥

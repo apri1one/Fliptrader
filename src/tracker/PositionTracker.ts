@@ -6,6 +6,15 @@ export interface Position {
 
 export class PositionTracker {
   private positions = new Map<string, Map<string, { rawSize: number; lastPrice: number }>>();
+  private leverageMap = new Map<string, number>(); // "targetName:coin" -> leverage
+
+  setLeverage(targetName: string, coin: string, leverage: number): void {
+    this.leverageMap.set(`${targetName}:${coin}`, leverage);
+  }
+
+  getLeverage(targetName: string, coin: string): number | null {
+    return this.leverageMap.get(`${targetName}:${coin}`) ?? null;
+  }
 
   applyFill(targetName: string, coin: string, side: "B" | "A", size: number, price: number): void {
     if (!this.positions.has(targetName)) {

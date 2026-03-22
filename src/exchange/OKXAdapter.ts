@@ -28,7 +28,13 @@ export class OKXAdapter implements ExchangeAdapter {
   }
 
   async ensureIsolatedMargin(symbol: string, leverage: number): Promise<void> {
-    await this.client.setMarginMode("isolated", symbol);
+    try {
+      // 先尝试设置单向持仓模式
+      await this.client.setPositionMode(false, symbol);
+    } catch {
+      // 可能已经是单向模式
+    }
+    await this.client.setMarginMode("isolated", symbol, { lever: String(leverage) });
     await this.client.setLeverage(leverage, symbol, { mgnMode: "isolated" });
     log.info(TAG, `set ${symbol} isolated ${leverage}x`);
   }
@@ -50,7 +56,7 @@ export class OKXAdapter implements ExchangeAdapter {
     price: number,
     reduceOnly: boolean,
   ): Promise<string> {
-    const params: Record<string, unknown> = { tdMode: "isolated" };
+    const params: Record<string, unknown> = { tdMode: "isolated", posSide: "net" };
     if (reduceOnly) params.reduceOnly = true;
     const order = await this.client.createOrder(
       symbol,
