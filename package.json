@@ -5,6 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "cli": "tsx src/cli.ts",
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
