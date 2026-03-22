@@ -34,7 +34,12 @@ export class OKXAdapter implements ExchangeAdapter {
 
   async getBookTop(symbol: string): Promise<BookTop> {
     const ob = await this.client.fetchOrderBook(symbol, 1);
-    return { bid: Number(ob.bids[0][0]), ask: Number(ob.asks[0][0]) };
+    const bid = ob.bids?.[0]?.[0];
+    const ask = ob.asks?.[0]?.[0];
+    if (bid === undefined || ask === undefined) {
+      throw new Error(`empty order book for ${symbol}`);
+    }
+    return { bid, ask };
   }
 
   async placePostOnly(
@@ -77,7 +82,7 @@ export class OKXAdapter implements ExchangeAdapter {
 
   // C1+C2: OKX 原生 chase 限价单，带轮询等待实际成交 + reduceOnly 透传
   async placeChaseLimitOrder(params: OrderParams): Promise<OrderResult> {
-    const instId = params.symbol.replace("/", "-").replace(":", "-");
+    const instId = params.symbol.split("/")[0] + "-USDT-SWAP";
 
     const reqBody: Record<string, string> = {
       instId,
@@ -162,18 +167,34 @@ export class OKXAdapter implements ExchangeAdapter {
       }
     }
 
-    // 超时，尝试取消
+    // 超时，尝试取消并检查已成交量
     log.warn(TAG, `algo ${algoId} poll timeout, attempting cancel`);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (this.client as any).privatePostTradeCancelAlgos(
-        JSON.stringify([{ algoId, instId }]),
+        [{ algoId, instId }],
       );
     } catch (e: any) {
       log.warn(TAG, `cancel algo ${algoId} failed: ${e.message}`);
     }
 
-    return { orderId: algoId, filledSize: 0, avgPrice: 0, status: "failed" };
+    // 超时后查一次成交量
+    try {
+      const history = (await (this.client as any).privateGetTradeOrdersAlgoHistory({
+        ordType: "chase",
+        algoId,
+      })) as { data?: Array<Record<string, string>> };
+      const historyOrder = history?.data?.[0];
+      if (historyOrder) {
+        const filledSize = parseFloat(historyOrder.actualSz || "0");
+        const avgPrice = parseFloat(historyOrder.actualPx || "0");
+        if (filledSize > 0) {
+          log.info(TAG, `algo ${algoId} had partial fill after timeout: ${filledSize}`);
+          return { orderId: algoId, filledSize, avgPrice, status: "partial" as const };
+        }
+      }
+    } catch {}
+
+    return { orderId: algoId, filledSize: 0, avgPrice: 0, status: "failed" as const };
   }
 
   async getPosition(

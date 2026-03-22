@@ -23,6 +23,7 @@ export class HyperliquidMonitor {
   private handlers: FillHandler[] = [];
   private targets: TargetConfig[];
   private reconnectDelayMs = 3000;
+  private stopped = false;
   private onInitialPositions?: InitialPositionHandler;
   private processedFills = new Set<string>();
   private readonly MAX_PROCESSED_FILLS = 10_000;
@@ -51,6 +52,7 @@ export class HyperliquidMonitor {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const [name, ws] of this.wsList) {
       ws.close();
       log.info(TAG, `closed WS for ${name}`);
@@ -122,8 +124,12 @@ export class HyperliquidMonitor {
     });
 
     ws.on("close", () => {
-      log.warn(TAG, `disconnected for ${target.name}, reconnecting...`);
       this.wsList.delete(target.name);
+      if (this.stopped) {
+        log.info(TAG, `WS closed for ${target.name} (stopped)`);
+        return;
+      }
+      log.warn(TAG, `disconnected for ${target.name}, reconnecting...`);
       setTimeout(() => this.connectTarget(target), this.reconnectDelayMs);
     });
 
@@ -157,6 +163,11 @@ export class HyperliquidMonitor {
   ): void {
     if (data.isSnapshot) {
       log.debug(TAG, `snapshot for ${target.name}, ${data.fills.length} historical fills (skipped)`);
+      return;
+    }
+
+    if (data.user !== target.address) {
+      log.warn(TAG, `user mismatch for ${target.name}: expected ${target.address}, got ${data.user}`);
       return;
     }
 
