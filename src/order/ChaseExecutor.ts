@@ -3,11 +3,22 @@ import * as log from "../utils/logger.js";
 
 const TAG = "Chase";
 
+const DEFAULT_MAX_ITERATIONS = 120;
+const DEFAULT_TIMEOUT_MS = 120_000; // 2 minutes
+
 export class ChaseExecutor {
   private intervalMs: number;
+  private maxIterations: number;
+  private timeoutMs: number;
 
-  constructor(intervalMs: number = 1000) {
+  constructor(
+    intervalMs: number = 1000,
+    maxIterations: number = DEFAULT_MAX_ITERATIONS,
+    timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  ) {
     this.intervalMs = intervalMs;
+    this.maxIterations = maxIterations;
+    this.timeoutMs = timeoutMs;
   }
 
   async execute(
@@ -20,26 +31,36 @@ export class ChaseExecutor {
     let filled = 0;
     let totalCost = 0;
     let currentOrderId: string | null = null;
+    let iterations = 0;
+    const startTime = Date.now();
 
     log.info(TAG, `start chase ${side} ${totalSize} ${symbol} on ${adapter.name}`);
 
     while (totalSize - filled > 1e-8) {
-      const remaining = totalSize - filled;
+      // S-C2: 超时保护
+      if (iterations >= this.maxIterations) {
+        log.warn(TAG, `max iterations (${this.maxIterations}) reached, stopping chase`);
+        break;
+      }
+      if (Date.now() - startTime > this.timeoutMs) {
+        log.warn(TAG, `timeout (${this.timeoutMs}ms) reached, stopping chase`);
+        break;
+      }
+      iterations++;
 
       // Cancel previous order if exists
       if (currentOrderId) {
         try {
-          // Check how much was filled before canceling
           const status = await adapter.getOrderStatus(symbol, currentOrderId);
           if (status.filled > 0) {
-            const book = await adapter.getBookTop(symbol);
-            const estPrice = side === "buy" ? book.bid : book.ask;
+            // H1: 使用实际成交价，而非盘口估算价
+            const fillPrice = status.avgPrice ?? (side === "buy" ? (await adapter.getBookTop(symbol)).bid : (await adapter.getBookTop(symbol)).ask);
             filled += status.filled;
-            totalCost += status.filled * estPrice;
-            log.info(TAG, `partial fill: ${status.filled}, total ${filled}/${totalSize}`);
+            totalCost += status.filled * fillPrice;
+            log.info(TAG, `partial fill: ${status.filled} @ ${fillPrice}, total ${filled}/${totalSize}`);
           }
           if (status.status === "closed") {
-            // Fully filled
+            currentOrderId = null;
             break;
           }
           await adapter.cancelOrder(symbol, currentOrderId);
@@ -49,7 +70,6 @@ export class ChaseExecutor {
         currentOrderId = null;
       }
 
-      // Recalculate remaining after fills
       const nowRemaining = totalSize - filled;
       if (nowRemaining <= 1e-8) break;
 
@@ -65,7 +85,6 @@ export class ChaseExecutor {
         currentOrderId = null;
       }
 
-      // Wait interval
       await sleep(this.intervalMs);
     }
 
@@ -74,10 +93,9 @@ export class ChaseExecutor {
       try {
         const status = await adapter.getOrderStatus(symbol, currentOrderId);
         if (status.filled > 0) {
-          const book = await adapter.getBookTop(symbol);
-          const estPrice = side === "buy" ? book.bid : book.ask;
+          const fillPrice = status.avgPrice ?? 0;
           filled += status.filled;
-          totalCost += status.filled * estPrice;
+          totalCost += status.filled * (fillPrice > 0 ? fillPrice : totalCost / filled || 0);
         }
         if (status.remaining > 0) {
           await adapter.cancelOrder(symbol, currentOrderId);
@@ -88,13 +106,13 @@ export class ChaseExecutor {
     }
 
     const avgPrice = filled > 0 ? totalCost / filled : 0;
-    log.info(TAG, `chase complete: ${filled} ${symbol} @ avg ${avgPrice.toFixed(2)}`);
+    log.info(TAG, `chase complete: ${filled} ${symbol} @ avg ${avgPrice.toFixed(2)} (${iterations} iterations)`);
 
     return {
       orderId: currentOrderId ?? "unknown",
       filledSize: filled,
       avgPrice,
-      status: filled >= totalSize - 1e-8 ? "filled" : "partial",
+      status: filled >= totalSize - 1e-8 ? "filled" : filled > 0 ? "partial" : "failed",
     };
   }
 }
