@@ -33,6 +33,12 @@ export class OrderManager {
   private chase: ChaseExecutor;
   private onOrderResult?: (target: string, coin: string, result: OrderResult, side: "buy" | "sell", isOpen: boolean) => void;
 
+  // H4: margin 模式缓存，避免每次 fill 都调用
+  private marginCache = new Set<string>();
+
+  // C4: 串行化 fill 处理，防止并发突破风控
+  private fillMutex: Promise<void> = Promise.resolve();
+
   constructor(
     adapters: Map<ExchangeId, ExchangeAdapter>,
     targets: TargetConfig[],
@@ -51,13 +57,34 @@ export class OrderManager {
     this.onOrderResult = handler;
   }
 
+  // C4: 用 mutex 串行化 fill 处理
   async handleFill(event: FillEvent): Promise<void> {
+    let releaseFn!: () => void;
+    const release = new Promise<void>((r) => { releaseFn = r; });
+    const prev = this.fillMutex;
+    this.fillMutex = release;
+
+    await prev;
+    try {
+      await this._handleFill(event);
+    } finally {
+      releaseFn();
+    }
+  }
+
+  private async _handleFill(event: FillEvent): Promise<void> {
     const config = this.targetMap.get(event.targetName);
     if (!config) return;
 
     const fill = event.fill;
     const price = parseFloat(fill.px);
     const fillSize = parseFloat(fill.sz);
+
+    // H2: NaN / 非法值校验
+    if (isNaN(price) || isNaN(fillSize) || price <= 0 || fillSize <= 0) {
+      log.error(TAG, `invalid fill data: px=${fill.px}, sz=${fill.sz}, skipping`);
+      return;
+    }
 
     // Update target position mirror
     this.tracker.applyFill(event.targetName, fill.coin, fill.side, fillSize, price);
@@ -70,17 +97,24 @@ export class OrderManager {
     let orderSize = calcOrderSize(config.sizeMode, config.sizeValue, fillSize, price);
     const orderNotional = orderSize * price;
 
+    // H2: 下单量 NaN 校验
+    if (isNaN(orderSize) || orderSize <= 0) {
+      log.error(TAG, `invalid order size: ${orderSize}, skipping`);
+      return;
+    }
+
     const adapter = this.adapters.get(config.exchange);
     if (!adapter) {
       log.error(TAG, `no adapter for ${config.exchange}`);
       return;
     }
 
-    // Risk check (only for opening positions, not for closing)
+    const myKey = `my-${event.targetName}`;
+
+    // Risk check for opening positions
     if (isOpen) {
-      const myKey = `my-${config.exchange}`;
       const currentCoinNotional = this.tracker.getCoinNotional(myKey, fill.coin);
-      const currentTotalNotional = this.tracker.getTotalNotional(myKey);
+      const currentTotalNotional = this.tracker.getGlobalNotional("my-");
 
       const riskResult = this.risk.check({
         coin: fill.coin,
@@ -99,12 +133,29 @@ export class OrderManager {
         orderSize = riskResult.adjustedNotional / price;
         log.info(TAG, `order size adjusted to ${orderSize}`);
       }
+    } else {
+      // H3: 平仓安全检查 — 确保我方确实有仓位可平，防止平仓信号变成反向开仓
+      const myPos = this.tracker.getPosition(myKey, fill.coin);
+      if (!myPos) {
+        log.warn(TAG, `close signal for ${fill.coin} but no position to close, skipping`);
+        return;
+      }
+      // 限制平仓量不超过实际持仓
+      if (orderSize > myPos.size) {
+        log.info(TAG, `close size ${orderSize} > position ${myPos.size}, capping to position size`);
+        orderSize = myPos.size;
+      }
     }
 
     const symbol = mapCoin(fill.coin, config.exchange);
 
     try {
-      await adapter.ensureIsolatedMargin(symbol, config.leverage);
+      // H4: 缓存 margin 设置，避免每次 fill 都调用交易所 API
+      const marginKey = `${config.exchange}:${symbol}:${config.leverage}`;
+      if (!this.marginCache.has(marginKey)) {
+        await adapter.ensureIsolatedMargin(symbol, config.leverage);
+        this.marginCache.add(marginKey);
+      }
 
       let result: OrderResult;
 
@@ -120,16 +171,18 @@ export class OrderManager {
         result = await this.chase.execute(adapter, symbol, reverseSide, orderSize, !isOpen);
       }
 
-      // Update my position tracker
-      const myKey = `my-${config.exchange}`;
-      const mySide: "B" | "A" = reverseSide === "buy" ? "B" : "A";
-      this.tracker.applyFill(myKey, fill.coin, mySide, result.filledSize, result.avgPrice || price);
+      // Update my position tracker (only if actually filled)
+      if (result.filledSize > 0) {
+        const mySide: "B" | "A" = reverseSide === "buy" ? "B" : "A";
+        this.tracker.applyFill(myKey, fill.coin, mySide, result.filledSize, result.avgPrice || price);
+      }
 
-      log.info(TAG, `${event.targetName} → reverse ${reverseSide} ${result.filledSize} ${fill.coin} on ${config.exchange}`);
+      log.info(TAG, `${event.targetName} → reverse ${reverseSide} ${result.filledSize} ${fill.coin} on ${config.exchange} (status: ${result.status})`);
 
       this.onOrderResult?.(event.targetName, fill.coin, result, reverseSide, isOpen);
     } catch (e: any) {
-      log.error(TAG, `order failed: ${e.message}`);
+      log.error(TAG, `order failed for ${fill.coin}: ${e.message}`);
+      throw e; // 重新抛出让上层 catch 触发 Telegram 通知
     }
   }
 }

@@ -50,4 +50,16 @@ export class PositionTracker {
     }
     return total;
   }
+
+  getGlobalNotional(prefix: string): number {
+    let total = 0;
+    for (const [key, positions] of this.positions) {
+      if (key.startsWith(prefix)) {
+        for (const [, pos] of positions) {
+          total += Math.abs(pos.rawSize) * pos.lastPrice;
+        }
+      }
+    }
+    return total;
+  }
 }
