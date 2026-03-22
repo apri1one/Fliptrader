@@ -20,13 +20,19 @@ async function main() {
   log.info(TAG, `loading config from ${configPath}`);
   const config = loadConfig(configPath);
 
+  // Determine testnet mode from config
+  const isTestnet = config.global.network === "testnet";
+  if (isTestnet) {
+    log.warn(TAG, "TESTNET MODE - using sandbox/testnet endpoints");
+  }
+
   // Initialize exchange adapters
   const adapters = new Map<ExchangeId, ExchangeAdapter>();
 
   if (config.exchanges.hyperliquid) {
     adapters.set(
       "hyperliquid",
-      new HyperliquidAdapter(config.exchanges.hyperliquid.privateKey),
+      new HyperliquidAdapter(config.exchanges.hyperliquid.privateKey, isTestnet),
     );
   }
   if (config.exchanges.binance) {
@@ -35,6 +41,7 @@ async function main() {
       new BinanceAdapter(
         config.exchanges.binance.apiKey,
         config.exchanges.binance.apiSecret,
+        isTestnet,
       ),
     );
   }
@@ -45,6 +52,7 @@ async function main() {
         config.exchanges.okx.apiKey,
         config.exchanges.okx.apiSecret,
         config.exchanges.okx.passphrase,
+        isTestnet,
       ),
     );
   }
@@ -54,6 +62,7 @@ async function main() {
       new BybitAdapter(
         config.exchanges.bybit.apiKey,
         config.exchanges.bybit.apiSecret,
+        isTestnet,
       ),
     );
   }
@@ -98,7 +107,7 @@ async function main() {
   });
 
   // Start monitor
-  const monitor = new HyperliquidMonitor(enabledTargets);
+  const monitor = new HyperliquidMonitor(enabledTargets, isTestnet);
 
   // H5: 初始仓位写入 tracker
   monitor.setInitialPositionHandler((targetName, positions) => {

@@ -8,10 +8,11 @@ export class HyperliquidAdapter implements ExchangeAdapter {
   name = "hyperliquid";
   private client: hyperliquid;
 
-  constructor(privateKey: string) {
+  constructor(privateKey: string, testnet: boolean = false) {
     this.client = new ccxt.hyperliquid({
       privateKey,
       walletAddress: undefined,
+      sandbox: testnet,
     });
   }
 

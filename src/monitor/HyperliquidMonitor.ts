@@ -5,7 +5,9 @@ import * as log from "../utils/logger.js";
 
 const TAG = "Monitor";
 const HL_WS_URL = "wss://api.hyperliquid.xyz/ws";
+const HL_WS_URL_TESTNET = "wss://api.hyperliquid-testnet.xyz/ws";
 const HL_INFO_URL = "https://api.hyperliquid.xyz/info";
+const HL_INFO_URL_TESTNET = "https://api.hyperliquid-testnet.xyz/info";
 
 // H5: 初始仓位回调类型
 export type InitialPositionHandler = (
@@ -27,9 +29,13 @@ export class HyperliquidMonitor {
   private onInitialPositions?: InitialPositionHandler;
   private processedFills = new Set<string>();
   private readonly MAX_PROCESSED_FILLS = 10_000;
+  private wsUrl: string;
+  private infoUrl: string;
 
-  constructor(targets: TargetConfig[]) {
+  constructor(targets: TargetConfig[], testnet: boolean = false) {
     this.targets = targets.filter((t) => t.enabled);
+    this.wsUrl = testnet ? HL_WS_URL_TESTNET : HL_WS_URL;
+    this.infoUrl = testnet ? HL_INFO_URL_TESTNET : HL_INFO_URL;
   }
 
   onFill(handler: FillHandler): void {
@@ -63,7 +69,7 @@ export class HyperliquidMonitor {
   // H5: REST 拉取初始仓位并通知 tracker
   async fetchInitialPositions(target: TargetConfig): Promise<void> {
     try {
-      const response = await fetch(HL_INFO_URL, {
+      const response = await fetch(this.infoUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -98,7 +104,7 @@ export class HyperliquidMonitor {
   }
 
   private connectTarget(target: TargetConfig): void {
-    const ws = new WebSocket(HL_WS_URL);
+    const ws = new WebSocket(this.wsUrl);
 
     ws.on("open", () => {
       log.info(TAG, `connected for ${target.name} (${target.address})`);

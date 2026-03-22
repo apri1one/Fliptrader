@@ -8,10 +8,11 @@ export class BinanceAdapter implements ExchangeAdapter {
   name = "binance";
   private client: binanceusdm;
 
-  constructor(apiKey: string, apiSecret: string) {
+  constructor(apiKey: string, apiSecret: string, testnet: boolean = false) {
     this.client = new ccxt.binanceusdm({
       apiKey,
       secret: apiSecret,
+      sandbox: testnet,
     });
   }
 

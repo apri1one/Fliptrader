@@ -8,10 +8,11 @@ export class BybitAdapter implements ExchangeAdapter {
   name = "bybit";
   private client: InstanceType<(typeof ccxt)["bybit"]>;
 
-  constructor(apiKey: string, apiSecret: string) {
+  constructor(apiKey: string, apiSecret: string, testnet: boolean = false) {
     this.client = new ccxt.bybit({
       apiKey,
       secret: apiSecret,
+      sandbox: testnet,
     });
   }
 

@@ -18,11 +18,12 @@ export class OKXAdapter implements ExchangeAdapter {
   name = "okx";
   private client: OKXClient;
 
-  constructor(apiKey: string, apiSecret: string, passphrase: string) {
+  constructor(apiKey: string, apiSecret: string, passphrase: string, testnet: boolean = false) {
     this.client = new ccxt.okx({
       apiKey,
       secret: apiSecret,
       password: passphrase,
+      sandbox: testnet,
     });
   }
 
