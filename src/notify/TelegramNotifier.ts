@@ -4,6 +4,10 @@ import * as log from "../utils/logger.js";
 
 const TAG = "Telegram";
 
+function escapeMarkdown(text: string): string {
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+}
+
 export class TelegramNotifier {
   private bot: TelegramBot;
   private chatId: string;
@@ -23,7 +27,9 @@ export class TelegramNotifier {
   ): Promise<void> {
     const action = isOpen ? "反向开仓" : "反向平仓";
     const sideText = side === "buy" ? "做多" : "做空";
-    const statusText = result.status === "filled" ? "已成交" : "部分成交";
+    const statusText = result.status === "filled" ? "已成交"
+      : result.status === "partial" ? "部分成交"
+      : "失败";
 
     const msg = [
       `📊 *${action}*`,
@@ -45,7 +51,7 @@ export class TelegramNotifier {
 
   async notifyError(message: string): Promise<void> {
     try {
-      await this.bot.sendMessage(this.chatId, `⚠️ *异常*\n${message}`, { parse_mode: "Markdown" });
+      await this.bot.sendMessage(this.chatId, `⚠️ *异常*\n${escapeMarkdown(message)}`, { parse_mode: "Markdown" });
     } catch (e: any) {
       log.error(TAG, `send failed: ${e.message}`);
     }
