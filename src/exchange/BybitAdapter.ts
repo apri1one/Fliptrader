@@ -6,7 +6,7 @@ const TAG = "Bybit-Adapter";
 
 export class BybitAdapter implements ExchangeAdapter {
   name = "bybit";
-  private client: ccxt.bybit;
+  private client: InstanceType<(typeof ccxt)["bybit"]>;
 
   constructor(apiKey: string, apiSecret: string) {
     this.client = new ccxt.bybit({
@@ -27,7 +27,12 @@ export class BybitAdapter implements ExchangeAdapter {
 
   async getBookTop(symbol: string): Promise<BookTop> {
     const ob = await this.client.fetchOrderBook(symbol, 1);
-    return { bid: ob.bids[0][0], ask: ob.asks[0][0] };
+    const bid = ob.bids[0]?.[0];
+    const ask = ob.asks[0]?.[0];
+    if (bid === undefined || ask === undefined) {
+      throw new Error(`Empty order book for ${symbol}`);
+    }
+    return { bid, ask };
   }
 
   async placePostOnly(
