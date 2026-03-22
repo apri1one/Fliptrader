@@ -339,12 +339,16 @@ async function addTarget(): Promise<void> {
   const leverage = parseInt(await askWithDefault("杠杆倍数", "10"));
   if (isNaN(leverage) || leverage <= 0) { console.log(red("杠杆必须 > 0")); return; }
 
-  console.log("仓位模式: 1.fixedRatio  2.equalSize  3.fixedAmount  4.leverageRatio");
+  console.log("仓位模式:");
+  console.log("  1. 杠杆等比 (leverageRatio)  — 匹配目标保证金用量，按杠杆比例缩放");
+  console.log("  2. 固定比例 (fixedRatio)     — 按目标成交量的固定比例跟单");
+  console.log("  3. 等量跟单 (equalSize)      — 和目标下同样数量");
+  console.log("  4. 固定金额 (fixedAmount)    — 每次下固定 USDT 金额");
   const modeChoice = (await askWithDefault("选择", "1")).trim();
-  const modeMap: Record<string, SizeMode> = { "1": "fixedRatio", "2": "equalSize", "3": "fixedAmount", "4": "leverageRatio" };
-  const sizeMode = modeMap[modeChoice] ?? "fixedRatio";
+  const modeMap: Record<string, SizeMode> = { "1": "leverageRatio", "2": "fixedRatio", "3": "equalSize", "4": "fixedAmount" };
+  const sizeMode = modeMap[modeChoice] ?? "leverageRatio";
 
-  const defaultSizeValue = sizeMode === "fixedRatio" ? "0.1" : sizeMode === "fixedAmount" ? "500" : sizeMode === "leverageRatio" ? "1" : "1";
+  const defaultSizeValue = sizeMode === "leverageRatio" ? "1" : sizeMode === "fixedRatio" ? "0.1" : sizeMode === "fixedAmount" ? "500" : "1";
   const sizeValue = parseFloat(await askWithDefault("仓位值", defaultSizeValue));
   if (isNaN(sizeValue) || sizeValue <= 0) { console.log(red("仓位值必须 > 0")); return; }
 
@@ -382,9 +386,14 @@ async function editTarget(): Promise<void> {
   if (!isNaN(lev) && lev > 0) t.leverage = lev;
 
   console.log(`当前模式: ${t.sizeMode}, 值: ${t.sizeValue}`);
-  console.log("仓位模式: 1.fixedRatio  2.equalSize  3.fixedAmount");
-  const modeChoice = (await askWithDefault("选择", t.sizeMode === "fixedRatio" ? "1" : t.sizeMode === "equalSize" ? "2" : "3")).trim();
-  const modeMap: Record<string, SizeMode> = { "1": "fixedRatio", "2": "equalSize", "3": "fixedAmount" };
+  console.log("仓位模式:");
+  console.log("  1. 杠杆等比 (leverageRatio)  — 匹配目标保证金用量，按杠杆比例缩放");
+  console.log("  2. 固定比例 (fixedRatio)     — 按目标成交量的固定比例跟单");
+  console.log("  3. 等量跟单 (equalSize)      — 和目标下同样数量");
+  console.log("  4. 固定金额 (fixedAmount)    — 每次下固定 USDT 金额");
+  const currentModeDefault = t.sizeMode === "leverageRatio" ? "1" : t.sizeMode === "fixedRatio" ? "2" : t.sizeMode === "equalSize" ? "3" : "4";
+  const modeChoice = (await askWithDefault("选择", currentModeDefault)).trim();
+  const modeMap: Record<string, SizeMode> = { "1": "leverageRatio", "2": "fixedRatio", "3": "equalSize", "4": "fixedAmount" };
   if (modeMap[modeChoice]) t.sizeMode = modeMap[modeChoice];
 
   const svStr = await askWithDefault("仓位值", String(t.sizeValue));
