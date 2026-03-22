@@ -36,8 +36,8 @@ export class OrderManager {
   // H4: margin 模式缓存，避免每次 fill 都调用
   private marginCache = new Set<string>();
 
-  // C4: 串行化 fill 处理，防止并发突破风控
-  private fillMutex: Promise<void> = Promise.resolve();
+  // C4: 串行化 fill 处理，防止并发突破风控（per-target 粒度）
+  private fillMutexes = new Map<string, Promise<void>>();
 
   constructor(
     adapters: Map<ExchangeId, ExchangeAdapter>,
@@ -57,12 +57,12 @@ export class OrderManager {
     this.onOrderResult = handler;
   }
 
-  // C4: 用 mutex 串行化 fill 处理
+  // C4: 用 per-target mutex 串行化 fill 处理
   async handleFill(event: FillEvent): Promise<void> {
     let releaseFn!: () => void;
     const release = new Promise<void>((r) => { releaseFn = r; });
-    const prev = this.fillMutex;
-    this.fillMutex = release;
+    const prev = this.fillMutexes.get(event.targetName) ?? Promise.resolve();
+    this.fillMutexes.set(event.targetName, release);
 
     await prev;
     try {
